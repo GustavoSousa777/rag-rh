@@ -1,0 +1,47 @@
+name: eval
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "retrieval (barato) ou full (resposta + juiz LLM)"
+        default: retrieval
+        type: choice
+        options: [retrieval, full]
+      strategy:
+        description: "tool ou always (so no modo full)"
+        default: tool
+        type: choice
+        options: [tool, always]
+  schedule:
+    - cron: "0 9 * * 1" # segundas, 09:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: pgvector/pgvector:pg17
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+      EVAL_MIN_HIT5: "0.85"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run ingest
+      - run: npm run eval -- --mode ${{ inputs.mode || 'retrieval' }} --strategy ${{ inputs.strategy || 'tool' }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: eval/results/*.json

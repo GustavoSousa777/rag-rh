@@ -1,0 +1,49 @@
+{
+  "name": "rag-rh",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:migrate": "tsx --conditions=react-server scripts/migrate.ts",
+    "ingest": "tsx --conditions=react-server scripts/ingest.ts",
+    "eval": "tsx --conditions=react-server eval/run-eval.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^4.0.112",
+    "@ai-sdk/react": "^4.0.167",
+    "ai": "^7.0.163",
+    "drizzle-orm": "^0.45.4",
+    "geist": "^1.9.1",
+    "next": "^16.4.5",
+    "postgres": "^4.0.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "unpdf": "^1.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.4",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.4.5",
+    "postcss": "^8.5.32",
+    "server-only": "^0.0.1",
+    "tailwindcss": "^4.3.4",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

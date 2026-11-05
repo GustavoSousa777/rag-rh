@@ -1,0 +1,7 @@
+{$DOMAIN:localhost} {
+	encode zstd gzip
+	# flush_interval -1 mantem o streaming das respostas (SSE) sem buffer
+	reverse_proxy app:3000 {
+		flush_interval -1
+	}
+}
