@@ -1,152 +1,201 @@
-# Assistente RAG de RH (G.Sousa)
+# Assistente RAG de RH
 
-Chat que responde dúvidas sobre o **Manual de Políticas Internas** da G.Sousa Consultoria em IA, citando a seção de origem de cada resposta. Construído com Next.js, Vercel AI SDK v7, Gemini e Postgres com pgvector.
+[![CI](https://github.com/GustavoSousa777/rag-rh/actions/workflows/ci.yml/badge.svg)](https://github.com/GustavoSousa777/rag-rh/actions/workflows/ci.yml)
+![Next.js](https://img.shields.io/badge/Next.js-16-black)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-![visual](docs/visual.png)
+Chatbot que responde dúvidas dos colaboradores sobre o Manual de Políticas Internas da G.Sousa Consultoria em IA (empresa fictícia). Cada resposta é gerada a partir de trechos recuperados do manual e indica a seção e a página de origem.
 
-## O que muda em relação ao protótipo Streamlit + LangChain
+![Interface do assistente](docs/visual.png)
 
-| Protótipo | Este projeto |
+## Funcionalidades
+
+- Respostas em streaming, com histórico completo da conversa (perguntas de acompanhamento como "e para remoto?" funcionam).
+- Citação da fonte em cada resposta: seção, título e página do manual.
+- Recusa de perguntas fora do escopo de RH e de tentativas de prompt injection.
+- Interface responsiva em branco e vermelho, com perguntas frequentes e botão para copiar ou gerar a resposta de novo.
+- Rate limit, validação de entrada e cabeçalhos de segurança.
+- Suíte de testes e um eval com 35 perguntas para medir a qualidade da recuperação e das respostas.
+
+## Stack
+
+| Camada | Tecnologia |
 | --- | --- |
-| O PDF era re-embedado a cada execução, gastando cota | Ingestão única e offline (`scripts/ingest.ts`), vetores persistidos no Postgres |
-| Chunks fixos de 1000/200 cortavam seções ao meio | Um chunk por seção (1.3.1, 2.2, 5.3...) com cabeçalho e metadados |
-| Só a última pergunta chegava ao modelo | Histórico completo via `useChat`; o modelo reescreve a consulta ao chamar a tool |
-| Sem citação de fonte | Chips com seção, título e página em cada resposta |
-| Sem limites, validação ou testes | Rate limit, validação com zod, 24 testes, eval e CI |
+| Aplicação | Next.js (App Router), React, TypeScript, Tailwind CSS |
+| IA | Vercel AI SDK v7, Gemini (chat e `gemini-embedding-001`) |
+| Dados | PostgreSQL com pgvector, Drizzle ORM |
+| Validação | zod |
+| Testes | Vitest |
+| Infra | Docker, Docker Compose, Caddy, GitHub Actions |
 
-## Arquitetura
+## Como funciona
 
 ```
 Navegador (useChat)
-   │  POST /api/chat (histórico)
+   │  POST /api/chat
    ▼
-Route Handler (Next.js)
-   ├─ rate limit por IP + validação (zod, só texto de user/assistant)
-   ├─ streamText(Gemini) com a tool buscarPolitica
-   │        │  o modelo decide quando buscar
+Route Handler
+   ├─ rate limit por IP e validação da entrada
+   ├─ streamText (Gemini) com a tool buscarPolitica
    │        ▼
-   │   retriever → embed(pergunta, RETRIEVAL_QUERY) → pgvector (top-k)
+   │   retriever: embedding da pergunta → busca por cosseno no pgvector (top 5)
    └─ resposta em streaming, citando as seções
 
-Offline: ingest.ts → PDF → limpeza → chunks por seção → embedMany → Postgres
+Ingestão (offline): PDF → limpeza → chunks por seção → embeddings → Postgres
 ```
 
-## Começando (desenvolvimento)
+### Decisões de projeto
 
-Requisitos: Node 22+ (a imagem Docker usa 24), Docker e uma chave do [Google AI Studio](https://aistudio.google.com/apikey).
+**Chunking por seção.** O manual é organizado em seções numeradas (1.3.1, 2.2, 6.3). Cada seção vira um chunk, com o cabeçalho (`Cap. 1 › 1.3.2 Auxílio Home Office`) incluído no texto embedado. Seções longas são divididas apenas entre parágrafos. Isso evita que uma regra seja cortada ao meio e permite citar a seção exata.
+
+**Ingestão separada da aplicação.** O PDF é processado uma vez, por script, e os vetores ficam no Postgres. A aplicação só consulta, sem reprocessar nem gastar cota de embeddings a cada execução.
+
+**Retrieval como tool.** O modelo decide quando consultar o manual e reescreve a pergunta usando o histórico. Isso evita buscas em cumprimentos e resolve perguntas dependentes de contexto. O eval compara essa abordagem com "buscar sempre" (`--strategy always`).
+
+**Embeddings assimétricos.** Chunks usam `RETRIEVAL_DOCUMENT` e perguntas usam `RETRIEVAL_QUERY`, que é o uso recomendado pelo modelo.
+
+**Busca exata.** Com algumas dezenas de chunks, a busca por similaridade exata é rápida e dispensa índice HNSW.
+
+**Extração tolerante do PDF.** Alguns extratores colam o fim de uma página ao início da próxima (`BENEFÍCIOS2.1 Estrutura Salarial`). A limpeza separa esses cabeçalhos sem quebrar numerações legítimas como `1.3.1`, e o chunker só aceita seções cuja numeração avança dentro do capítulo, o que descarta referências cruzadas como falsos cabeçalhos.
+
+## Pré-requisitos
+
+- Node.js 22 ou superior
+- Docker
+- Chave de API do [Google AI Studio](https://aistudio.google.com/apikey)
+
+## Executando localmente
 
 ```bash
-cp .env.example .env            # preencha GOOGLE_GENERATIVE_AI_API_KEY e confira GEMINI_MODEL
-docker compose -f docker-compose.dev.yml up -d   # só o Postgres com pgvector
+git clone https://github.com/GustavoSousa777/rag-rh.git
+cd rag-rh
+
+cp .env.example .env
+# edite o .env: GOOGLE_GENERATIVE_AI_API_KEY e, se quiser, GEMINI_MODEL
+
+docker compose -f docker-compose.dev.yml up -d   # Postgres com pgvector
 npm install
-npm run ingest                  # PDF -> chunks -> embeddings -> Postgres
-npm run dev                     # http://localhost:3000
+npm run ingest                                   # PDF → chunks → embeddings → Postgres
+npm run dev                                      # http://localhost:3000
 ```
 
-Se `POSTGRES_PASSWORD` não estiver no `.env`, o compose de desenvolvimento usa `postgres`, e a `DATABASE_URL` do `.env.example` deve bater com a senha escolhida.
+A senha do banco em `DATABASE_URL` deve ser a mesma usada pelo Postgres. O compose de desenvolvimento usa `postgres` quando `POSTGRES_PASSWORD` não está definida.
+
+## Configuração
+
+As variáveis são validadas na inicialização (`src/lib/env.ts`). Se algo estiver errado, o erro diz qual variável corrigir.
+
+| Variável | Padrão | Descrição |
+| --- | --- | --- |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | obrigatória | Chave do Gemini. Usada apenas no servidor |
+| `DATABASE_URL` | obrigatória | Conexão com o Postgres (extensão `vector`) |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Modelo de chat. Consulte a lista atual do Google |
+| `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` | Modelo de embeddings |
+| `EMBEDDING_DIMENSIONS` | `768` | 768, 1536 ou 3072. Ao alterar, recrie a tabela e rode a ingestão de novo |
+| `RATE_LIMIT_MAX` | `15` | Requisições por IP por janela |
+| `RATE_LIMIT_WINDOW_S` | `60` | Tamanho da janela, em segundos |
 
 ## Scripts
 
-| Comando | O que faz |
+| Comando | Descrição |
 | --- | --- |
-| `npm run dev` / `build` / `start` | Next.js |
-| `npm run lint` / `typecheck` / `test` | Qualidade (a CI roda os três) |
-| `npm run ingest [caminho.pdf]` | Cria a tabela (idempotente) e recarrega todos os chunks |
-| `npm run db:migrate` | Só cria extensão e tabela |
-| `npm run eval` | Eval de recuperação (hit@k, MRR) |
-| `npm run eval -- --mode full` | Resposta completa, juiz LLM, latência e tokens |
-| `npm run eval -- --mode full --strategy always` | Compara "buscar sempre" com "tool" |
+| `npm run dev` | Servidor de desenvolvimento |
+| `npm run build` / `npm start` | Build e execução em produção |
+| `npm run lint` | ESLint |
+| `npm run typecheck` | Verificação de tipos |
+| `npm test` | Testes unitários |
+| `npm run ingest [arquivo.pdf]` | Cria a tabela e recarrega os chunks |
+| `npm run db:migrate` | Cria apenas a extensão e a tabela |
+| `npm run eval` | Eval de recuperação |
+| `npm run eval -- --mode full` | Eval completo, com juiz LLM |
 
-## Variáveis de ambiente
+## Testes
 
-Validadas com zod em `src/lib/env.ts` (falha com mensagem clara).
+```bash
+npm test
+```
 
-| Variável | Padrão | Notas |
-| --- | --- | --- |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | (obrigatória) | Só no servidor. Nunca use `NEXT_PUBLIC_` |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Escolha na lista atual do Google; troca sem mexer no código |
-| `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` | Usa `taskType` RETRIEVAL_DOCUMENT para chunks e RETRIEVAL_QUERY para perguntas |
-| `EMBEDDING_DIMENSIONS` | `768` | 768, 1536 ou 3072. Ao mudar, apague a tabela (`DROP TABLE chunks`) e rode `npm run ingest` de novo |
-| `DATABASE_URL` | (obrigatória) | Postgres com a extensão `vector` |
-| `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_S` | `15` / `60` | Requisições por IP por janela |
+Os testes cobrem:
 
-## Ingestão
-
-O texto do PDF tem emendas nas quebras de página e de capítulo em alguns extratores (`BENEFÍCIOS2.1 Estrutura Salarial`). Por isso:
-
-- `limpeza.ts` remove rodapés, normaliza espaços e separa cabeçalho colado, sem partir numerações legítimas como `1.3.1`.
-- `chunker.ts` gera um chunk por seção, valida que a numeração só avança dentro do capítulo (descarta falsos positivos como referências cruzadas) e divide só as seções longas, entre parágrafos.
-- Cada chunk é embedado com o cabeçalho `Cap. 1 › 1.3.2 Auxílio Home Office` e salvo com `capitulo`, `secao`, `titulo`, `pagina` e `parte`.
-- Os testes travam o comportamento: "o chunk 2.2 contém R$ 180,00", "nenhum chunk passa do tamanho máximo", "toda seção do manual virou chunk".
-
-O manual atual vira 77 chunks. Com tão poucos vetores a busca é exata, sem índice HNSW (o tipo `vector` indexa até 2000 dimensões, e 3072 exigiria `halfvec`).
+- **Chunker**, executado contra o PDF real: cada seção do manual vira chunk, os valores esperados aparecem na seção certa (por exemplo, R$ 180,00 em 2.2 e 4 horas em 6.3), nenhum chunk passa do tamanho máximo e o rodapé das páginas é removido.
+- **Limpeza**: emendas entre capítulo e seção, numerações legítimas preservadas e valores monetários e leis que não são confundidos com cabeçalhos.
+- **Validação de entrada**: papéis forjados, partes de tool enviadas pelo cliente, limites de tamanho e de quantidade.
+- **Rate limiter** e extração do IP do cliente.
+- **Fontes**: apenas as seções citadas na resposta aparecem como fonte.
 
 ## Avaliação
 
-`eval/dataset.jsonl` tem 35 perguntas com a seção esperada: diretas, de valor, de condição, de duas seções, armadilha de similaridade (prazo de incidente: 6.3, não 5.7), fora de escopo e injection.
+O eval usa a API real e o banco populado.
 
-- **Recuperação**: hit@1/3/5, MRR e "todas as seções esperadas em top-5".
-- **Resposta completa**: fidelidade (juiz LLM com saída estruturada), fatos esperados presentes, seção citada, taxa de recusa correta, latência e tokens.
-- Falha com código 1 se `hit@5` ficar abaixo de `EVAL_MIN_HIT5` (padrão 0.85).
-- Resultados em `eval/results/*.json`. Documente aqui os números dos seus experimentos: chunk por seção vs. fixo, 768 vs. 3072 dimensões, tool vs. buscar sempre.
+```bash
+npm run eval                                      # recuperação
+npm run eval -- --mode full                       # resposta completa
+npm run eval -- --mode full --strategy always     # compara com "buscar sempre"
+```
 
-| Experimento | hit@1 | hit@5 | MRR | Fidelidade | Latência |
-| --- | --- | --- | --- | --- | --- |
-| seção, 768 dims, tool | a medir | a medir | a medir | a medir | a medir |
+O dataset (`eval/dataset.jsonl`) tem 35 perguntas com a seção esperada, divididas em perguntas diretas, de valor, de condição, que dependem de duas seções, de similaridade enganosa (o prazo de incidente com dados é 6.3, não 5.7), fora de escopo e de injection.
+
+Métricas:
+
+- Recuperação: hit@1, hit@3, hit@5, MRR e presença de todas as seções esperadas no top 5.
+- Resposta: fidelidade aos trechos (juiz LLM com saída estruturada), presença dos fatos esperados, citação da seção correta, taxa de recusa correta, latência e tokens.
+
+O processo termina com erro se o hit@5 ficar abaixo de `EVAL_MIN_HIT5` (padrão `0.85`). Os resultados de cada execução são salvos em `eval/results/`.
 
 ## Segurança
 
-| Risco | Medida |
-| --- | --- |
-| Chave da API vazada | Só no servidor, `import "server-only"`, `.env` no `.gitignore`, gitleaks na CI |
-| Cliente forjar o histórico | `validar-entrada.ts` aceita só texto de `user`/`assistant`, descarta partes de tool vindas do cliente, limita nº e tamanho das mensagens e exige que a última seja do usuário |
-| Prompt injection | Prompt trata trechos como dados, escopo restrito, nenhuma tool com efeito colateral, casos de ataque no eval |
-| Custo e abuso | Rate limit por IP, `maxOutputTokens`, limite de passos, limite de tamanho |
-| XSS na resposta | Markdown sem HTML cru e sem imagens |
-| Cabeçalhos | CSP, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` em `next.config.ts` |
-| Dados pessoais nos logs | Loga tamanho, latência, tokens e seções recuperadas, nunca o texto das perguntas |
-| Supply chain | `npm ci` com lockfile, Dependabot, `npm audit`, Trivy na imagem |
-| Container | Multi-stage, usuário não-root, banco sem porta pública, segredos fora da imagem |
-| LGPD | O manual é fictício. Com documento real, confira os termos de uso de dados do plano do Gemini antes de enviar conteúdo |
+- A chave da API fica só no servidor (`server-only`, sem `NEXT_PUBLIC_`) e o `.env` não é versionado. O gitleaks roda na CI.
+- O `useChat` reenvia todo o histórico, então o servidor não confia nele. Só texto de `user` e `assistant` é aceito, resultados de tool enviados pelo cliente são descartados e a última mensagem precisa ser do usuário.
+- O prompt trata os trechos recuperados como dados, restringe o escopo ao RH e não revela as próprias instruções. A tool não tem efeitos colaterais.
+- Rate limit por IP, limite de passos e de tokens de saída e limite de tamanho das mensagens.
+- Respostas renderizadas como Markdown sem HTML cru e sem imagens. CSP, `X-Content-Type-Options`, `Referrer-Policy` e `X-Frame-Options` configurados em `next.config.ts`.
+- Os logs registram tamanho, latência, tokens e seções recuperadas, nunca o texto das perguntas.
+- Container multi-stage com usuário não root, banco sem porta publicada e verificação da imagem com Trivy na CI.
 
-O limitador é em memória, o que basta para um único container. Com várias réplicas, troque por Redis.
+O rate limiter é em memória, adequado para um único container. Com várias réplicas, use um armazenamento compartilhado, como Redis.
 
-## Produção com Docker
+## Deploy
+
+### Docker Compose
 
 ```bash
-cp .env.example .env     # defina POSTGRES_PASSWORD, a chave do Gemini e DOMAIN (ex.: rh.seudominio.com)
+cp .env.example .env     # defina POSTGRES_PASSWORD, a chave do Gemini e DOMAIN
 docker compose up -d --build
-docker compose run --rm app-tools     # ingestão (imagem de ferramentas, fora do runtime)
+docker compose run --rm app-tools     # ingestão
 ```
 
-O Caddy emite HTTPS automático quando `DOMAIN` é um domínio público apontado para o servidor. Em `localhost` ele usa certificado local. O banco não expõe porta.
+O Caddy faz o HTTPS automaticamente quando `DOMAIN` aponta para o servidor. O banco só é acessível pela rede interna do Compose.
 
-## CI/CD
+### CI/CD
 
-- `ci.yml`: lint, tipos, testes, build, gitleaks, `npm audit`, build da imagem, Trivy. Em push na `main`, publica no GHCR e faz deploy por SSH (`docker compose pull && up -d`).
-- `eval.yml`: manual ou semanal, usa o secret real e falha se `hit@5` cair. Não roda em todo PR, para não gastar cota.
-- Secrets necessários: `GOOGLE_GENERATIVE_AI_API_KEY` (eval), `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PATH` (deploy).
-- Antes de usar em produção, fixe as actions por SHA (a Trivy está em `@master` só por conveniência).
-- Alternativa sem Docker: Vercel com um Postgres gerenciado que tenha pgvector.
+- `ci.yml`: lint, tipos, testes, build, gitleaks, `npm audit`, build da imagem e Trivy. Em push na `main`, publica a imagem no GHCR e faz o deploy por SSH.
+- `eval.yml`: execução manual ou semanal, usa a chave real e falha se o hit@5 cair. Não roda a cada pull request, para não gastar cota.
+- Secrets: `GOOGLE_GENERATIVE_AI_API_KEY` (eval) e `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PATH` (deploy).
 
-## Estrutura
+Também é possível publicar na Vercel, usando um Postgres gerenciado com pgvector.
+
+## Estrutura do projeto
 
 ```
-src/app/api/chat/route.ts   rate limit, validação, streamText + tool
-src/lib/ai/                 model, prompts, tools, tipos
-src/lib/rag/                pdf, limpeza, chunker, embed, retriever
-src/lib/db/                 schema (drizzle), client, migração
-src/lib/security/           rate-limit, validar-entrada
-src/components/chat/        interface (chat, mensagem, fontes, composer, sidebar)
-scripts/                    ingest, migrate
-eval/                       dataset.jsonl, run-eval.ts, results/
-tests/                      chunker, validação, fontes
+src/
+  app/api/chat/       endpoint de chat (rate limit, validação, streamText)
+  app/api/health/     health check
+  components/chat/    interface do chat
+  lib/ai/             modelo, prompts, tools
+  lib/rag/            pdf, limpeza, chunker, embeddings, retriever
+  lib/db/             schema, cliente e migração
+  lib/security/       rate limit e validação de entrada
+scripts/              ingestão e migração
+eval/                 dataset e runner do eval
+tests/                testes unitários
+data/source/          PDF do manual
 ```
 
-## Próximos passos (para treinar o SDK)
+## Autor
 
-Saída estruturada já é usada no juiz do eval. Ideias: uma tool `abrirChamadoRH` com aprovação humana (`needsApproval`), persistência do histórico por conversa e streaming de fontes durante a busca.
+Gustavo Pereira Sousa
 
-## Aviso sobre versões
+[GitHub](https://github.com/GustavoSousa777) · [LinkedIn](https://linkedin.com/in/gustavosousa777)
 
-O AI SDK muda nomes entre versões maiores. Este projeto foi escrito e compilado contra `ai@7` (`isStepCount`, `system`, `inputSchema`, `toUIMessageStreamResponse`). Se atualizar, confira o guia de Next.js em ai-sdk.dev.
+O manual usado como base é um documento fictício, criado para demonstração.
